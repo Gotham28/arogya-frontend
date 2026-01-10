@@ -6,7 +6,7 @@ import TypingIndicator from './TypingIndicator';
 import { Message } from '../types/chat';
 
 const BACKEND_URL = "https://arogya-backend-y7d6.onrender.com";
-';
+
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Mic, MicOff } from 'lucide-react';
+import { Send, Sparkles, Mic, MicOff, Globe } from 'lucide-react'; // Added Globe
 import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
 import ChatMessage from './ChatMessage';
 import TypingIndicator from './TypingIndicator';
@@ -13,6 +13,7 @@ export default function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [preferredLanguage, setPreferredLanguage] = useState<'en' | 'ml' | null>(null);
+  const [showLanguageButtons, setShowLanguageButtons] = useState(true); // New state to control buttons
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -20,7 +21,7 @@ export default function Chat() {
     listening,
     resetTranscript,
     browserSupportsSpeechRecognition,
-    isMicrophoneAvailable,  // Added this critical check
+    isMicrophoneAvailable,
   } = useSpeechRecognition();
 
   /* -------------------- Scroll -------------------- */
@@ -49,33 +50,46 @@ export default function Chat() {
         {
           id: 'welcome',
           text:
-            "Hello! ✨\n\nWelcome to Arogya — your trusted hospital assistant.\n\nI'm here to help with doctors, symptoms, timings, and more.\n\nPlease choose your preferred language:",
-          sender: 'bot',
-          timestamp: new Date(),
-        },
-        {
-          id: 'lang-options',
-          text: '🇬🇧 English\n\n🇮🇳 മലയാളം (Malayalam)',
+            "Hello! ✨\n\nWelcome to Arogya — your trusted hospital assistant.\nI'm here to help with doctors, symptoms, timings, and more.\n\nPlease select your language:",
           sender: 'bot',
           timestamp: new Date(),
         },
       ]);
+      setShowLanguageButtons(true);
     }
   }, []);
 
-  /* -------------------- Mic handler (IMPROVED) -------------------- */
+  /* -------------------- Language selection handler -------------------- */
+  const selectLanguage = (lang: 'en' | 'ml') => {
+    setPreferredLanguage(lang);
+    setShowLanguageButtons(false);
+
+    const confirmationText =
+      lang === 'en'
+        ? "Great! 😊 I'll respond in English from now on.\n\nHow can I help you today?"
+        : 'നല്ല തിരഞ്ഞെടുപ്പ്! 😊 ഇനി മുതൽ മലയാളത്തിൽ മറുപടി തരാം.\n\nഎന്താണ് സഹായിക്കാൻ കഴിയുക?';
+
+    setMessages(prev => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        text: confirmationText,
+        sender: 'bot',
+        timestamp: new Date(),
+      },
+    ]);
+  };
+
+  /* -------------------- Mic handler -------------------- */
   const toggleListening = () => {
     if (!browserSupportsSpeechRecognition) {
       alert('Voice input is not supported in this browser. Please type your message.');
       return;
     }
-
     if (preferredLanguage === null) {
       alert('Please choose a language first (English or Malayalam).');
       return;
     }
-
-    // Critical: Check if microphone permission was denied
     if (isMicrophoneAvailable === false) {
       alert(
         'Microphone access was denied.\n\n' +
@@ -87,15 +101,12 @@ export default function Chat() {
       );
       return;
     }
-
     if (listening) {
       SpeechRecognition.stopListening();
       return;
     }
-
     resetTranscript();
-    setInput(''); // Clear previous text before new listening
-
+    setInput('');
     SpeechRecognition.startListening({
       continuous: false,
       language: preferredLanguage === 'ml' ? 'ml-IN' : 'en-IN',
@@ -110,36 +121,16 @@ export default function Chat() {
     const finalInput = input.trim();
     if (!finalInput || isLoading) return;
 
-    /* -------- Language selection -------- */
+    /* -------- Fallback language selection by typing -------- */
     if (preferredLanguage === null) {
       const lower = finalInput.toLowerCase();
       if (lower.includes('english') || lower.includes('eng')) {
-        setPreferredLanguage('en');
-        setMessages(prev => [
-          ...prev,
-          { id: Date.now().toString(), text: finalInput, sender: 'user', timestamp: new Date() },
-          {
-            id: (Date.now() + 1).toString(),
-            text: "Great! 😊 I'll respond in English from now on.\n\nHow can I help you today?",
-            sender: 'bot',
-            timestamp: new Date(),
-          },
-        ]);
+        selectLanguage('en'); // Reuse the new function
         setInput('');
         return;
       }
       if (lower.includes('malayalam') || /[\u0D00-\u0D7F]/.test(finalInput)) {
-        setPreferredLanguage('ml');
-        setMessages(prev => [
-          ...prev,
-          { id: Date.now().toString(), text: finalInput, sender: 'user', timestamp: new Date() },
-          {
-            id: (Date.now() + 1).toString(),
-            text: 'നല്ല തിരഞ്ഞെടുപ്പ്! 😊 ഇനി മുതൽ മലയാളത്തിൽ മറുപടി തരാം.\n\nഎന്താണ് സഹായിക്കാൻ കഴിയുക?',
-            sender: 'bot',
-            timestamp: new Date(),
-          },
-        ]);
+        selectLanguage('ml');
         setInput('');
         return;
       }
@@ -161,7 +152,7 @@ export default function Chat() {
         body: JSON.stringify({
           message: finalInput,
           voice_enabled: voiceEnabled,
-          language: preferredLanguage || 'en',
+          language: preferredLanguage || 'en', // Fallback to 'en' if somehow null
         }),
       });
 
@@ -220,6 +211,27 @@ export default function Chat() {
             <ChatMessage key={msg.id} message={msg} />
           ))}
           {isLoading && <TypingIndicator />}
+
+          {/* Language buttons - shown only at start */}
+          {showLanguageButtons && (
+            <div className="flex flex-col sm:flex-row justify-center gap-6 mt-8">
+              <button
+                onClick={() => selectLanguage('en')}
+                className="flex items-center justify-center gap-3 px-10 py-8 bg-white border-2 border-green-600 rounded-2xl shadow-lg hover:bg-green-50 active:scale-95 transition-all text-2xl font-semibold"
+              >
+                <Globe className="w-10 h-10 text-green-600" />
+                English
+              </button>
+              <button
+                onClick={() => selectLanguage('ml')}
+                className="flex items-center justify-center gap-3 px-10 py-8 bg-white border-2 border-green-600 rounded-2xl shadow-lg hover:bg-green-50 active:scale-95 transition-all text-2xl font-semibold"
+              >
+                <Globe className="w-10 h-10 text-green-600" />
+                മലയാളം
+              </button>
+            </div>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -236,11 +248,7 @@ export default function Chat() {
           <div className="flex justify-center gap-10 mb-6">
             <button
               onClick={toggleListening}
-              disabled={
-                isMicrophoneAvailable === false ||
-                preferredLanguage === null ||
-                isLoading
-              }
+              disabled={isMicrophoneAvailable === false || preferredLanguage === null || isLoading}
               className={`p-4 rounded-full text-white shadow-md transition-all ${
                 listening
                   ? 'bg-red-600 animate-pulse'
@@ -255,9 +263,7 @@ export default function Chat() {
             <button
               onClick={() => setVoiceEnabled(v => !v)}
               className={`px-8 py-3 rounded-full shadow-md transition-colors ${
-                voiceEnabled
-                  ? 'bg-green-600 text-white'
-                  : 'bg-gray-300 text-gray-700'
+                voiceEnabled ? 'bg-green-600 text-white' : 'bg-gray-300 text-gray-700'
               }`}
             >
               {voiceEnabled ? '🔊 Voice ON' : '🔇 Voice OFF'}

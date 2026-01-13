@@ -1,14 +1,25 @@
-import { Message } from '../types/chat';
 import { useEffect } from 'react';
+import { Message } from '../types/chat';
 
 interface ChatMessageProps {
   message: Message;
 }
 
+const renderBoldText = (text: string) => {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      const boldText = part.slice(2, -2);
+      return <strong key={index} className="font-bold text-green-800">{boldText}</strong>;
+    }
+    return part;
+  });
+};
+
 export default function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.sender === 'user';
 
-  // Auto-play audio if provided and voice enabled
   useEffect(() => {
     if (!isUser && message.audio_url) {
       const audio = new Audio(message.audio_url);
@@ -34,9 +45,16 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             : 'bg-gradient-to-r from-green-100 to-emerald-100 text-gray-800 border border-green-200'
         }`}
       >
-        <p className="text-lg leading-relaxed whitespace-pre-wrap break-words">
-          {message.text}
-        </p>
+        <div className="text-lg leading-relaxed break-words">
+          {renderBoldText(message.text)}
+        </div>
+
+        {/* Audio fallback */}
+        {!isUser && message.audio_url && (
+          <div className="mt-3">
+            <audio controls src={message.audio_url} className="w-full" />
+          </div>
+        )}
       </div>
 
       {/* User Avatar */}

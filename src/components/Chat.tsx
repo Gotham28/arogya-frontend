@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Mic, MicOff, Globe } from 'lucide-react'; // Added Globe
+import { Send, Sparkles, Mic, MicOff, Globe } from 'lucide-react';
 import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
 import ChatMessage from './ChatMessage';
 import TypingIndicator from './TypingIndicator';
@@ -11,9 +11,8 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [preferredLanguage, setPreferredLanguage] = useState<'en' | 'ml' | null>(null);
-  const [showLanguageButtons, setShowLanguageButtons] = useState(true); // New state to control buttons
+  const [showLanguageButtons, setShowLanguageButtons] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -24,26 +23,30 @@ export default function Chat() {
     isMicrophoneAvailable,
   } = useSpeechRecognition();
 
-  /* -------------------- Scroll -------------------- */
+  // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  /* -------------------- Sync speech → input -------------------- */
+  // Sync transcript → input while listening
   useEffect(() => {
     if (listening) {
       setInput(transcript);
     }
   }, [transcript, listening]);
 
-  /* Preserve transcript when mic stops */
+  // Preserve transcript when mic stops naturally
   useEffect(() => {
-    if (!listening && transcript) {
-      setInput(transcript);
+    if (!listening && transcript.trim()) {
+      setInput(transcript.trim());
+      // Auto-send if we have content and mic just stopped
+      if (!isLoading) {
+        sendMessage(); // Will use current input
+      }
     }
-  }, [listening]);
+  }, [listening, transcript, isLoading]);
 
-  /* -------------------- Initial welcome -------------------- */
+  // Initial welcome
   useEffect(() => {
     if (messages.length === 0) {
       setMessages([
@@ -59,16 +62,13 @@ export default function Chat() {
     }
   }, []);
 
-  /* -------------------- Language selection handler -------------------- */
   const selectLanguage = (lang: 'en' | 'ml') => {
     setPreferredLanguage(lang);
     setShowLanguageButtons(false);
-
     const confirmationText =
       lang === 'en'
         ? "Great! 😊 I'll respond in English from now on.\n\nHow can I help you today?"
         : 'നല്ല തിരഞ്ഞെടുപ്പ്! 😊 ഇനി മുതൽ മലയാളത്തിൽ മറുപടി തരാം.\n\nഎന്താണ് സഹായിക്കാൻ കഴിയുക?';
-
     setMessages(prev => [
       ...prev,
       {
@@ -80,7 +80,7 @@ export default function Chat() {
     ]);
   };
 
-  /* -------------------- Mic handler -------------------- */
+  // Mic toggle with auto-restart + max timeout
   const toggleListening = () => {
     if (!browserSupportsSpeechRecognition) {
       alert('Voice input is not supported in this browser. Please type your message.');
@@ -101,31 +101,60 @@ export default function Chat() {
       );
       return;
     }
+
     if (listening) {
       SpeechRecognition.stopListening();
       return;
     }
+
     resetTranscript();
     setInput('');
-    SpeechRecognition.startListening({
-      continuous: false,
-      language: preferredLanguage === 'ml' ? 'ml-IN' : 'en-IN',
-    }).catch((err) => {
-      console.error('Speech recognition start error:', err);
-      alert('Failed to start listening. Please check microphone permission and try again.');
-    });
+
+    const startListening = () => {
+      SpeechRecognition.startListening({
+        continuous: false,
+        language: preferredLanguage === 'ml' ? 'ml-IN' : 'en-IN',
+      }).catch(err => {
+        console.error('Speech start error:', err);
+        alert('Failed to start listening. Check microphone permission.');
+      });
+    };
+
+    startListening();
+
+    // Auto-restart after short silence (makes it feel longer)
+    const restartOnEnd = () => {
+      if (!input.trim()) { // Only restart if nothing was said yet
+        startListening();
+      }
+    };
+
+    SpeechRecognition.onend = restartOnEnd;
+
+    // Hard max timeout: stop + send after ~45 seconds regardless
+    const maxTimeout = setTimeout(() => {
+      SpeechRecognition.stopListening();
+      if (input.trim() && !isLoading) {
+        sendMessage();
+      }
+      SpeechRecognition.onend = null; // Clean up
+    }, 45000);
+
+    return () => {
+      clearTimeout(maxTimeout);
+      SpeechRecognition.onend = null;
+    };
   };
 
-  /* -------------------- Send message -------------------- */
   const sendMessage = async () => {
     const finalInput = input.trim();
     if (!finalInput || isLoading) return;
 
-    /* -------- Fallback language selection by typing -------- */
+    // Language fallback via typing (kept for convenience)
     if (preferredLanguage === null) {
       const lower = finalInput.toLowerCase();
       if (lower.includes('english') || lower.includes('eng')) {
-        selectLanguage('en'); // Reuse the new function
+        selectLanguage('en');
         setInput('');
         return;
       }
@@ -136,7 +165,7 @@ export default function Chat() {
       }
     }
 
-    /* -------- Normal chat -------- */
+    // Add user message
     setMessages(prev => [
       ...prev,
       { id: Date.now().toString(), text: finalInput, sender: 'user', timestamp: new Date() },
@@ -151,8 +180,7 @@ export default function Chat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: finalInput,
-          voice_enabled: voiceEnabled,
-          language: preferredLanguage || 'en', // Fallback to 'en' if somehow null
+          language: preferredLanguage || 'en', // Removed voice_enabled
         }),
       });
 
@@ -164,7 +192,6 @@ export default function Chat() {
         {
           id: (Date.now() + 1).toString(),
           text: data.reply,
-          audio_url: voiceEnabled ? data.audio_url : undefined,
           sender: 'bot',
           timestamp: new Date(),
         },
@@ -184,7 +211,6 @@ export default function Chat() {
     }
   };
 
-  /* -------------------- Enter key -------------------- */
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -192,7 +218,11 @@ export default function Chat() {
     }
   };
 
-  /* -------------------- UI -------------------- */
+  // Instruction text based on language
+  const voiceInstruction = preferredLanguage === 'ml'
+    ? "മൈക്ക് ഓണാക്കാൻ താഴെയുള്ള ബട്ടൺ ക്ലിക്ക് ചെയ്യുക"
+    : "Click the mic button below to speak";
+
   return (
     <div className="flex flex-col h-screen bg-gradient-to-b from-green-50 to-emerald-100">
       <header className="bg-gradient-to-r from-green-700 to-emerald-800 text-white px-6 py-8 shadow-lg">
@@ -211,8 +241,6 @@ export default function Chat() {
             <ChatMessage key={msg.id} message={msg} />
           ))}
           {isLoading && <TypingIndicator />}
-
-          {/* Language buttons - shown only at start */}
           {showLanguageButtons && (
             <div className="flex flex-col sm:flex-row justify-center gap-6 mt-8">
               <button
@@ -231,7 +259,6 @@ export default function Chat() {
               </button>
             </div>
           )}
-
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -241,7 +268,14 @@ export default function Chat() {
           {/* Mic permission warning */}
           {preferredLanguage !== null && isMicrophoneAvailable === false && (
             <p className="text-red-600 text-center mb-4 text-sm font-medium">
-              Microphone access denied. Tap the lock icon next to the URL → Permissions → Microphone → Allow, then refresh the page.
+              Microphone access denied. Tap the lock icon next to the URL → Permissions → Microphone → Allow, then refresh.
+            </p>
+          )}
+
+          {/* Voice instruction */}
+          {preferredLanguage !== null && (
+            <p className="text-center text-green-700 text-base font-medium mb-4">
+              {voiceInstruction}
             </p>
           )}
 
@@ -249,7 +283,7 @@ export default function Chat() {
             <button
               onClick={toggleListening}
               disabled={isMicrophoneAvailable === false || preferredLanguage === null || isLoading}
-              className={`p-4 rounded-full text-white shadow-md transition-all ${
+              className={`p-5 rounded-full text-white shadow-md transition-all ${
                 listening
                   ? 'bg-red-600 animate-pulse'
                   : isMicrophoneAvailable === false
@@ -257,16 +291,7 @@ export default function Chat() {
                   : 'bg-green-600 hover:bg-green-700 active:scale-95'
               }`}
             >
-              {listening ? <MicOff className="w-7 h-7" /> : <Mic className="w-7 h-7" />}
-            </button>
-
-            <button
-              onClick={() => setVoiceEnabled(v => !v)}
-              className={`px-8 py-3 rounded-full shadow-md transition-colors ${
-                voiceEnabled ? 'bg-green-600 text-white' : 'bg-gray-300 text-gray-700'
-              }`}
-            >
-              {voiceEnabled ? '🔊 Voice ON' : '🔇 Voice OFF'}
+              {listening ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8" />}
             </button>
           </div>
 

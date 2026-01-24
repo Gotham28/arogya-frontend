@@ -1,6 +1,8 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Mic, MicOff, Send } from "lucide-react";
-import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
+import SpeechRecognition, {
+  useSpeechRecognition,
+} from "react-speech-recognition";
 import ChatMessage from "./ChatMessage";
 import TypingIndicator from "./TypingIndicator";
 import { Message } from "../types/chat";
@@ -22,52 +24,63 @@ export default function Chat() {
     browserSupportsSpeechRecognition,
   } = useSpeechRecognition();
 
-  /* -------------------------
+  /* --------------------
      Auto-scroll
-  ------------------------- */
+  -------------------- */
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  /* -------------------------
-     Sync speech → input
-  ------------------------- */
+  /* --------------------
+     Sync voice → input
+  -------------------- */
   useEffect(() => {
-    if (listening) setInput(transcript);
+    if (listening) {
+      setInput(transcript);
+    }
   }, [transcript, listening]);
 
-  /* -------------------------
+  /* --------------------
      Mic toggle (FIXED)
-  ------------------------- */
-  const toggleMic = () => {
-    if (!browserSupportsSpeechRecognition || !language) return;
+  -------------------- */
+  const handleMicClick = async () => {
+    if (!language) return;
 
-    if (listening) {
-      SpeechRecognition.stopListening();
-    } else {
-      resetTranscript();
-      SpeechRecognition.startListening({
-        continuous: false,
-        language: language === "ml" ? "ml-IN" : "en-IN",
-      });
+    if (!browserSupportsSpeechRecognition) {
+      alert("Voice input is not supported in this browser.");
+      return;
+    }
+
+    try {
+      if (listening) {
+        SpeechRecognition.stopListening();
+      } else {
+        resetTranscript();
+        await SpeechRecognition.startListening({
+          continuous: false,
+          language: language === "ml" ? "ml-IN" : "en-IN",
+        });
+      }
+    } catch (err) {
+      alert("Microphone permission denied. Please allow mic access.");
     }
   };
 
-  /* -------------------------
+  /* --------------------
      Send message
-  ------------------------- */
+  -------------------- */
   const sendMessage = async () => {
     const text = input.trim();
     if (!text || isLoading || !language) return;
 
-    const userMessage: Message = {
+    const userMsg: Message = {
       id: Date.now().toString(),
       text,
       sender: "user",
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages(prev => [...prev, userMsg]);
     setInput("");
     resetTranscript();
     setIsLoading(true);
@@ -87,19 +100,19 @@ export default function Chat() {
 
       const data = await res.json();
 
-      const botMessage: Message = {
+      const botMsg: Message = {
         id: (Date.now() + 1).toString(),
         text: data.reply,
         sender: "bot",
         timestamp: new Date(),
       };
 
-      setMessages(prev => [...prev, botMessage]);
+      setMessages(prev => [...prev, botMsg]);
     } catch {
       setMessages(prev => [
         ...prev,
         {
-          id: "error",
+          id: "err",
           text: "Something went wrong. Please try again.",
           sender: "bot",
           timestamp: new Date(),
@@ -110,49 +123,46 @@ export default function Chat() {
     }
   };
 
-  /* -------------------------
-     Instruction text
-  ------------------------- */
   const instruction =
     language === "ml"
-      ? "സംസാരിക്കാൻ മൈക്ക് ബട്ടൺ അമർത്തുക"
-      : "Click the mic button to speak";
+      ? "സംസാരിക്കാൻ മൈക്ക് അമർത്തുക"
+      : "Tap the mic to speak";
 
   return (
     <div className="flex flex-col h-screen bg-green-50">
-
       {/* HEADER */}
-      <header className="bg-green-600 text-white px-6 py-5 text-center shadow">
-        <h1 className="text-2xl font-bold">Arogya</h1>
-        <p className="text-green-100">Hospital Assistant</p>
+      <header className="bg-green-700 text-white px-6 py-6 shadow">
+        <h1 className="text-3xl font-bold">Arogya</h1>
+        <p className="text-green-200 text-lg">
+          Your trusted hospital assistant
+        </p>
       </header>
 
       {/* CHAT */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
-        {messages.map(msg => (
-          <ChatMessage key={msg.id} message={msg} />
+        {messages.map(m => (
+          <ChatMessage key={m.id} message={m} />
         ))}
         {isLoading && <TypingIndicator />}
         <div ref={messagesEndRef} />
       </div>
 
       {/* CONTROLS */}
-      <div className="bg-white border-t px-4 py-4">
-
+      <div className="bg-white border-t px-4 py-5">
         {/* LANGUAGE SELECTION */}
         {!language && (
-          <div className="flex justify-center gap-4 mb-4">
+          <div className="space-y-4 mb-6">
             <button
               onClick={() => setLanguage("en")}
-              className="px-6 py-3 bg-green-600 text-white rounded-full font-semibold"
+              className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700 flex justify-center items-center gap-3"
             >
-              English
+              🌐 English
             </button>
             <button
               onClick={() => setLanguage("ml")}
-              className="px-6 py-3 bg-green-600 text-white rounded-full font-semibold"
+              className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700 flex justify-center items-center gap-3"
             >
-              മലയാളം
+              🌐 മലയാളം
             </button>
           </div>
         )}
@@ -164,21 +174,23 @@ export default function Chat() {
           </p>
         )}
 
-        {/* MIC BUTTON (CENTERED) */}
+        {/* MIC BUTTON */}
         <div className="flex justify-center mb-4">
           <button
-            onClick={toggleMic}
+            onClick={handleMicClick}
             disabled={!language}
             className={`p-6 rounded-full text-white shadow-lg transition ${
-              listening ? "bg-red-500 animate-pulse" : "bg-green-600"
+              listening
+                ? "bg-red-500 animate-pulse"
+                : "bg-green-600"
             }`}
           >
-            {listening ? <MicOff size={28} /> : <Mic size={28} />}
+            {listening ? <MicOff size={30} /> : <Mic size={30} />}
           </button>
         </div>
 
         {/* INPUT */}
-        <div className="flex gap-3 max-w-4xl mx-auto">
+        <div className="flex gap-3">
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -186,8 +198,8 @@ export default function Chat() {
             disabled={!language}
             placeholder={
               language
-                ? "Type your message..."
-                : "Select a language first"
+                ? "Type your message…"
+                : "Choose language first 😊"
             }
             className="flex-1 px-4 py-3 rounded-full border border-green-300 focus:outline-none focus:ring-2 focus:ring-green-500"
           />

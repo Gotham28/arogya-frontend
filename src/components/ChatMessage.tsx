@@ -112,7 +112,7 @@ function DoctorListCards({ text }: { text: string }) {
           key={dept.name}
           className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden"
         >
-          <div className="bg-gradient-to-r from-teal-600 to-cyan-600 text-white px-6 py-4">
+          <div className="bg-green-100 text-gray-900 border border-green-200">
             <h3 className="text-xl font-bold">{dept.name}</h3>
           </div>
           <div className="p-5 space-y-4">

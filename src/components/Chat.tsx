@@ -24,30 +24,57 @@ export default function Chat() {
     browserSupportsSpeechRecognition,
   } = useSpeechRecognition();
 
-  /* --------------------
+  /* -------------------------
+     Welcome message (ONCE)
+  ------------------------- */
+  useEffect(() => {
+    if (messages.length === 0) {
+      setMessages([
+        {
+          id: "welcome",
+          sender: "bot",
+          timestamp: new Date(),
+          text:
+            "Hello! ✨ Welcome to Arogya — your trusted hospital assistant.\n\nPlease select your language:",
+        },
+      ]);
+    }
+  }, []);
+
+  /* -------------------------
      Auto-scroll
-  -------------------- */
+  ------------------------- */
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  /* --------------------
+  /* -------------------------
      Sync voice → input
-  -------------------- */
+  ------------------------- */
   useEffect(() => {
     if (listening) {
       setInput(transcript);
     }
   }, [transcript, listening]);
 
-  /* --------------------
-     Mic toggle (FIXED)
-  -------------------- */
+  /* -------------------------
+     Auto-send when mic stops
+  ------------------------- */
+  useEffect(() => {
+    if (!listening && transcript.trim() && language) {
+      sendMessage(transcript.trim());
+      resetTranscript();
+    }
+  }, [listening]);
+
+  /* -------------------------
+     Mic toggle
+  ------------------------- */
   const handleMicClick = async () => {
     if (!language) return;
 
     if (!browserSupportsSpeechRecognition) {
-      alert("Voice input is not supported in this browser.");
+      alert("Voice input not supported in this browser.");
       return;
     }
 
@@ -61,28 +88,29 @@ export default function Chat() {
           language: language === "ml" ? "ml-IN" : "en-IN",
         });
       }
-    } catch (err) {
-      alert("Microphone permission denied. Please allow mic access.");
+    } catch {
+      alert("Please allow microphone access.");
     }
   };
 
-  /* --------------------
+  /* -------------------------
      Send message
-  -------------------- */
-  const sendMessage = async () => {
-    const text = input.trim();
+  ------------------------- */
+  const sendMessage = async (textOverride?: string) => {
+    const text = (textOverride ?? input).trim();
     if (!text || isLoading || !language) return;
 
-    const userMsg: Message = {
-      id: Date.now().toString(),
-      text,
-      sender: "user",
-      timestamp: new Date(),
-    };
+    setMessages(prev => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        sender: "user",
+        text,
+        timestamp: new Date(),
+      },
+    ]);
 
-    setMessages(prev => [...prev, userMsg]);
     setInput("");
-    resetTranscript();
     setIsLoading(true);
 
     try {
@@ -92,29 +120,27 @@ export default function Chat() {
           "Content-Type": "application/json",
           "X-Session-ID": sessionStorage.getItem("chat_session_id") || "",
         },
-        body: JSON.stringify({
-          message: text,
-          language,
-        }),
+        body: JSON.stringify({ message: text, language }),
       });
 
       const data = await res.json();
 
-      const botMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        text: data.reply,
-        sender: "bot",
-        timestamp: new Date(),
-      };
-
-      setMessages(prev => [...prev, botMsg]);
+      setMessages(prev => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          sender: "bot",
+          text: data.reply,
+          timestamp: new Date(),
+        },
+      ]);
     } catch {
       setMessages(prev => [
         ...prev,
         {
-          id: "err",
-          text: "Something went wrong. Please try again.",
+          id: "error",
           sender: "bot",
+          text: "Something went wrong. Please try again.",
           timestamp: new Date(),
         },
       ]);
@@ -149,62 +175,55 @@ export default function Chat() {
 
       {/* CONTROLS */}
       <div className="bg-white border-t px-4 py-5">
-        {/* LANGUAGE SELECTION */}
         {!language && (
           <div className="space-y-4 mb-6">
             <button
               onClick={() => setLanguage("en")}
-              className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700 flex justify-center items-center gap-3"
+              className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700"
             >
               🌐 English
             </button>
             <button
               onClick={() => setLanguage("ml")}
-              className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700 flex justify-center items-center gap-3"
+              className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700"
             >
               🌐 മലയാളം
             </button>
           </div>
         )}
 
-        {/* MIC INSTRUCTION */}
         {language && (
           <p className="text-center text-green-700 text-sm mb-3">
             {instruction}
           </p>
         )}
 
-        {/* MIC BUTTON */}
         <div className="flex justify-center mb-4">
           <button
             onClick={handleMicClick}
             disabled={!language}
-            className={`p-6 rounded-full text-white shadow-lg transition ${
-              listening
-                ? "bg-red-500 animate-pulse"
-                : "bg-green-600"
+            className={`p-6 rounded-full text-white shadow-lg ${
+              listening ? "bg-red-500 animate-pulse" : "bg-green-600"
             }`}
           >
             {listening ? <MicOff size={30} /> : <Mic size={30} />}
           </button>
         </div>
 
-        {/* INPUT */}
         <div className="flex gap-3">
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && sendMessage()}
             disabled={!language}
             placeholder={
               language
                 ? "Type your message…"
                 : "Choose language first 😊"
             }
-            className="flex-1 px-4 py-3 rounded-full border border-green-300 focus:outline-none focus:ring-2 focus:ring-green-500"
+            className="flex-1 px-4 py-3 rounded-full border border-green-300"
           />
           <button
-            onClick={sendMessage}
+            onClick={() => sendMessage()}
             disabled={!input.trim() || !language}
             className="p-4 bg-green-600 text-white rounded-full"
           >

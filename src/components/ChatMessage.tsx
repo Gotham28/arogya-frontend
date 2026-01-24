@@ -54,7 +54,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           <div
             className={`px-6 py-5 rounded-3xl text-base leading-relaxed shadow-md ${
               isUser
-                ? "bg-gradient-to-r from-teal-600 to-cyan-600 text-white"
+                ? "bg-green-100 text-gray-900 border border-green-200"
                 : "bg-white text-gray-800 border border-gray-200"
             }`}
           >

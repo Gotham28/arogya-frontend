@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { Mic, MicOff, Send } from "lucide-react";
-import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
+import SpeechRecognition, {
+  useSpeechRecognition,
+} from "react-speech-recognition";
 import ChatMessage from "./ChatMessage";
 import TypingIndicator from "./TypingIndicator";
 import { Message } from "../types/chat";
@@ -14,8 +16,8 @@ export default function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<"en" | "ml" | null>(null);
 
-  const silenceTimer = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const silenceTimer = useRef<NodeJS.Timeout | null>(null);
 
   const {
     transcript,
@@ -25,7 +27,7 @@ export default function Chat() {
   } = useSpeechRecognition();
 
   /* -------------------------
-     Welcome message
+     Welcome message (once)
   ------------------------- */
   useEffect(() => {
     if (messages.length === 0) {
@@ -50,6 +52,7 @@ export default function Chat() {
 
   /* -------------------------
      SILENCE-BASED AUTO SEND
+     (FIXED ORDER)
   ------------------------- */
   useEffect(() => {
     if (!listening || !language) return;
@@ -61,12 +64,26 @@ export default function Chat() {
     }
 
     silenceTimer.current = setTimeout(() => {
-      if (transcript.trim()) {
-        sendMessage(transcript.trim());
-        resetTranscript();
-        SpeechRecognition.stopListening();
+      const finalText = transcript.trim();
+      if (!finalText) return;
+
+      // 🔴 CRITICAL: stop mic FIRST
+      SpeechRecognition.stopListening();
+
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+        silenceTimer.current = null;
       }
+
+      resetTranscript();
+      sendMessage(finalText);
     }, SILENCE_DELAY);
+
+    return () => {
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+      }
+    };
   }, [transcript]);
 
   /* -------------------------
@@ -101,7 +118,12 @@ export default function Chat() {
 
     setMessages(prev => [
       ...prev,
-      { id: Date.now().toString(), sender: "user", text, timestamp: new Date() },
+      {
+        id: Date.now().toString(),
+        sender: "user",
+        text,
+        timestamp: new Date(),
+      },
     ]);
 
     setInput("");
@@ -114,7 +136,10 @@ export default function Chat() {
           "Content-Type": "application/json",
           "X-Session-ID": sessionStorage.getItem("chat_session_id") || "",
         },
-        body: JSON.stringify({ message: text, language }),
+        body: JSON.stringify({
+          message: text,
+          language,
+        }),
       });
 
       const data = await res.json();
@@ -150,11 +175,13 @@ export default function Chat() {
 
   return (
     <div className="flex flex-col h-screen bg-green-50">
+      {/* HEADER */}
       <header className="bg-green-700 text-white px-6 py-6 shadow">
         <h1 className="text-3xl font-bold">Arogya</h1>
         <p className="text-green-200">Your trusted hospital assistant</p>
       </header>
 
+      {/* CHAT */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
         {messages.map(m => (
           <ChatMessage key={m.id} message={m} />
@@ -163,6 +190,7 @@ export default function Chat() {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* CONTROLS */}
       <div className="bg-white border-t px-4 py-5">
         {!language && (
           <div className="space-y-4 mb-6">
@@ -190,7 +218,7 @@ export default function Chat() {
         <div className="flex justify-center mb-4">
           <button
             onClick={handleMicClick}
-            className={`p-6 rounded-full text-white ${
+            className={`p-6 rounded-full text-white transition ${
               listening ? "bg-red-500 animate-pulse" : "bg-green-600"
             }`}
           >
@@ -204,9 +232,15 @@ export default function Chat() {
             onChange={e => setInput(e.target.value)}
             disabled={!language}
             className="flex-1 px-4 py-3 rounded-full border border-green-300"
+            placeholder={
+              language
+                ? "Type your message…"
+                : "Choose language first 😊"
+            }
           />
           <button
             onClick={() => sendMessage()}
+            disabled={!input.trim() || !language}
             className="p-4 bg-green-600 text-white rounded-full"
           >
             <Send size={20} />

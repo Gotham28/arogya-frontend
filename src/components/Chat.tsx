@@ -16,12 +16,14 @@ export default function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<"en" | "ml" | null>(null);
 
+  // 🔴 Manual mic state (CRITICAL)
+  const [isMicActive, setIsMicActive] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const silenceTimer = useRef<NodeJS.Timeout | null>(null);
 
   const {
     transcript,
-    listening,
     resetTranscript,
     browserSupportsSpeechRecognition,
   } = useSpeechRecognition();
@@ -52,10 +54,10 @@ export default function Chat() {
 
   /* -------------------------
      SILENCE-BASED AUTO SEND
-     (FIXED ORDER)
+     (MANUAL MIC CONTROL)
   ------------------------- */
   useEffect(() => {
-    if (!listening || !language) return;
+    if (!isMicActive || !language) return;
 
     setInput(transcript);
 
@@ -67,8 +69,9 @@ export default function Chat() {
       const finalText = transcript.trim();
       if (!finalText) return;
 
-      // 🔴 CRITICAL: stop mic FIRST
+      // 🔴 HARD STOP MIC
       SpeechRecognition.stopListening();
+      setIsMicActive(false);
 
       if (silenceTimer.current) {
         clearTimeout(silenceTimer.current);
@@ -87,7 +90,7 @@ export default function Chat() {
   }, [transcript]);
 
   /* -------------------------
-     Mic toggle
+     Mic toggle (FIXED)
   ------------------------- */
   const handleMicClick = async () => {
     if (!language) return;
@@ -97,12 +100,23 @@ export default function Chat() {
       return;
     }
 
-    if (listening) {
+    // 🔴 MANUAL STOP
+    if (isMicActive) {
       SpeechRecognition.stopListening();
+      setIsMicActive(false);
+      resetTranscript();
+
+      if (silenceTimer.current) {
+        clearTimeout(silenceTimer.current);
+        silenceTimer.current = null;
+      }
       return;
     }
 
+    // 🔴 MANUAL START
     resetTranscript();
+    setIsMicActive(true);
+
     await SpeechRecognition.startListening({
       continuous: true,
       language: language === "ml" ? "ml-IN" : "en-IN",
@@ -215,17 +229,19 @@ export default function Chat() {
           </p>
         )}
 
+        {/* MIC BUTTON */}
         <div className="flex justify-center mb-4">
           <button
             onClick={handleMicClick}
             className={`p-6 rounded-full text-white transition ${
-              listening ? "bg-red-500 animate-pulse" : "bg-green-600"
+              isMicActive ? "bg-red-500 animate-pulse" : "bg-green-600"
             }`}
           >
-            {listening ? <MicOff size={30} /> : <Mic size={30} />}
+            {isMicActive ? <MicOff size={30} /> : <Mic size={30} />}
           </button>
         </div>
 
+        {/* INPUT */}
         <div className="flex gap-3">
           <input
             value={input}

@@ -25,7 +25,7 @@ export default function Chat() {
   } = useSpeechRecognition();
 
   /* -------------------------
-     Welcome message (ONCE)
+     Welcome message (once)
   ------------------------- */
   useEffect(() => {
     if (messages.length === 0) {
@@ -58,23 +58,25 @@ export default function Chat() {
   }, [transcript, listening]);
 
   /* -------------------------
-     Auto-send when mic stops
+     AUTO-SEND WHEN MIC STOPS
+     (KEY FIX)
   ------------------------- */
   useEffect(() => {
     if (!listening && transcript.trim() && language) {
       sendMessage(transcript.trim());
       resetTranscript();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listening]);
 
   /* -------------------------
-     Mic toggle
+     Mic toggle (IMPROVED)
   ------------------------- */
   const handleMicClick = async () => {
     if (!language) return;
 
     if (!browserSupportsSpeechRecognition) {
-      alert("Voice input not supported in this browser.");
+      alert("Voice input is not supported in this browser.");
       return;
     }
 
@@ -84,7 +86,7 @@ export default function Chat() {
       } else {
         resetTranscript();
         await SpeechRecognition.startListening({
-          continuous: false,
+          continuous: true, // 🔑 accuracy improvement
           language: language === "ml" ? "ml-IN" : "en-IN",
         });
       }
@@ -151,8 +153,8 @@ export default function Chat() {
 
   const instruction =
     language === "ml"
-      ? "സംസാരിക്കാൻ മൈക്ക് അമർത്തുക"
-      : "Tap the mic to speak";
+      ? "വ്യക്തമായി സംസാരിക്കുക, കഴിഞ്ഞാൽ നിർത്തുക"
+      : "Speak clearly and pause when finished";
 
   return (
     <div className="flex flex-col h-screen bg-green-50">
@@ -198,6 +200,7 @@ export default function Chat() {
           </p>
         )}
 
+        {/* MIC BUTTON */}
         <div className="flex justify-center mb-4">
           <button
             onClick={handleMicClick}
@@ -210,6 +213,7 @@ export default function Chat() {
           </button>
         </div>
 
+        {/* INPUT (typing still allowed) */}
         <div className="flex gap-3">
           <input
             value={input}

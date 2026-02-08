@@ -1,15 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { Mic, MicOff, Send } from "lucide-react";
-import SpeechRecognition, {
-  useSpeechRecognition,
-} from "react-speech-recognition";
+
 import ChatMessage from "./ChatMessage";
 import TypingIndicator from "./TypingIndicator";
 import { Message } from "../types/chat";
 
 const BACKEND_URL = "https://arogya-backend-y7d6.onrender.com";
-const SILENCE_DELAY = 1200; // ms
-const MAX_MIC_DURATION = 8000; // 8 seconds safety cutoff
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -17,21 +13,16 @@ export default function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<"en" | "ml" | null>(null);
 
-  // 🔴 Manual mic state
   const [isMicActive, setIsMicActive] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const silenceTimer = useRef<NodeJS.Timeout | null>(null);
-  const maxMicTimer = useRef<NodeJS.Timeout | null>(null);
+  const mediaRecorder = useRef<MediaRecorder | null>(null);
+  const audioChunks = useRef<Blob[]>([]);
 
-  const {
-    transcript,
-    resetTranscript,
-    browserSupportsSpeechRecognition,
-  } = useSpeechRecognition();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
 
   /* -------------------------
-     Welcome message
+     Welcome
   ------------------------- */
   useEffect(() => {
     if (messages.length === 0) {
@@ -47,111 +38,93 @@ export default function Chat() {
     }
   }, []);
 
+
   /* -------------------------
-     Auto-scroll
+     Scroll
   ------------------------- */
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  /* -------------------------
-     Silence-based auto send
-  ------------------------- */
-  useEffect(() => {
-    if (!isMicActive || !language) return;
-
-    setInput(transcript);
-
-    if (silenceTimer.current) {
-      clearTimeout(silenceTimer.current);
-    }
-
-    silenceTimer.current = setTimeout(() => {
-      const finalText = transcript.trim();
-      if (!finalText) return;
-
-      SpeechRecognition.stopListening();
-      setIsMicActive(false);
-
-      if (silenceTimer.current) {
-        clearTimeout(silenceTimer.current);
-        silenceTimer.current = null;
-      }
-
-      if (maxMicTimer.current) {
-        clearTimeout(maxMicTimer.current);
-        maxMicTimer.current = null;
-      }
-
-      resetTranscript();
-      sendMessage(finalText);
-    }, SILENCE_DELAY);
-
-    return () => {
-      if (silenceTimer.current) {
-        clearTimeout(silenceTimer.current);
-      }
-    };
-  }, [transcript]);
 
   /* -------------------------
-     Mic toggle (SAFE)
+     Mic (Whisper)
   ------------------------- */
   const handleMicClick = async () => {
     if (!language) return;
 
-    if (!browserSupportsSpeechRecognition) {
-      alert("Voice input is not supported in this browser.");
-      return;
-    }
-
-    // 🔴 Manual stop
+    // STOP
     if (isMicActive) {
-      SpeechRecognition.stopListening();
+      mediaRecorder.current?.stop();
       setIsMicActive(false);
-      resetTranscript();
-
-      if (silenceTimer.current) {
-        clearTimeout(silenceTimer.current);
-        silenceTimer.current = null;
-      }
-
-      if (maxMicTimer.current) {
-        clearTimeout(maxMicTimer.current);
-        maxMicTimer.current = null;
-      }
-
       return;
     }
 
-    // 🔴 Manual start
-    resetTranscript();
-    setIsMicActive(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
 
-    // ⏱️ Safety cutoff
-    maxMicTimer.current = setTimeout(() => {
-      SpeechRecognition.stopListening();
-      setIsMicActive(false);
+      const recorder = new MediaRecorder(stream);
 
-      if (maxMicTimer.current) {
-        clearTimeout(maxMicTimer.current);
-        maxMicTimer.current = null;
-      }
+      audioChunks.current = [];
 
-      console.log("Mic auto-stopped (safety)");
-    }, MAX_MIC_DURATION);
+      recorder.ondataavailable = e => {
+        audioChunks.current.push(e.data);
+      };
 
-    await SpeechRecognition.startListening({
-      continuous: language === "en",
-      language: language === "ml" ? "ml-IN" : "en-IN",
-    });
+      recorder.onstop = async () => {
+
+        const audioBlob = new Blob(
+          audioChunks.current,
+          { type: "audio/webm" }
+        );
+
+        const formData = new FormData();
+        formData.append("file", audioBlob, "speech.webm");
+
+        setIsLoading(true);
+
+        try {
+          const res = await fetch(
+            `${BACKEND_URL}/speech`,
+            {
+              method: "POST",
+              body: formData,
+            }
+          );
+
+          const data = await res.json();
+
+          if (data.text) {
+            sendMessage(data.text);
+          }
+
+        } catch {
+          alert("Voice recognition failed.");
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      recorder.start();
+
+      mediaRecorder.current = recorder;
+      setIsMicActive(true);
+
+    } catch {
+      alert("Microphone permission denied.");
+    }
   };
 
+
   /* -------------------------
-     Send message
+     Send
   ------------------------- */
   const sendMessage = async (textOverride?: string) => {
+
     const text = (textOverride ?? input).trim();
+
     if (!text || isLoading || !language) return;
 
     setMessages(prev => [
@@ -168,11 +141,13 @@ export default function Chat() {
     setIsLoading(true);
 
     try {
+
       const res = await fetch(`${BACKEND_URL}/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Session-ID": sessionStorage.getItem("chat_session_id") || "",
+          "X-Session-ID":
+            sessionStorage.getItem("chat_session_id") || "",
         },
         body: JSON.stringify({
           message: text,
@@ -191,59 +166,77 @@ export default function Chat() {
           timestamp: new Date(),
         },
       ]);
+
     } catch {
+
       setMessages(prev => [
         ...prev,
         {
           id: "error",
           sender: "bot",
-          text: "Something went wrong. Please try again.",
+          text: "Something went wrong.",
           timestamp: new Date(),
         },
       ]);
+
     } finally {
       setIsLoading(false);
     }
   };
 
+
   /* -------------------------
-     Instruction text
+     Instruction
   ------------------------- */
   const instruction = (() => {
+
     if (!language) return "";
 
     if (!isMicActive) {
       return language === "ml"
         ? "സംസാരിക്കാൻ മൈക്ക് അമർത്തുക"
-        : "Press the mic to speak";
+        : "Press mic to speak";
     }
 
     return language === "ml"
-      ? "ഇപ്പോൾ സംസാരിക്കുക"
-      : "Speak now";
+      ? "സംസാരിച്ച് കഴിഞ്ഞാൽ വീണ്ടും അമർത്തുക"
+      : "Press again to send";
+
   })();
+
 
   return (
     <div className="flex flex-col h-screen bg-green-50">
+
       {/* HEADER */}
       <header className="bg-green-700 text-white px-6 py-6 shadow">
         <h1 className="text-3xl font-bold">Arogya</h1>
-        <p className="text-green-200">Your trusted hospital assistant</p>
+        <p className="text-green-200">
+          Your trusted hospital assistant
+        </p>
       </header>
+
 
       {/* CHAT */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+
         {messages.map(m => (
           <ChatMessage key={m.id} message={m} />
         ))}
+
         {isLoading && <TypingIndicator />}
+
         <div ref={messagesEndRef} />
+
       </div>
+
 
       {/* CONTROLS */}
       <div className="bg-white border-t px-4 py-5">
+
         {!language && (
           <div className="space-y-4 mb-6">
+
             <button
               onClick={() => setLanguage("en")}
               className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700"
@@ -257,8 +250,10 @@ export default function Chat() {
             >
               മലയാളം
             </button>
+
           </div>
         )}
+
 
         {language && (
           <p className="text-center text-green-700 text-sm mb-3">
@@ -266,20 +261,29 @@ export default function Chat() {
           </p>
         )}
 
+
         {/* MIC */}
         <div className="flex justify-center mb-4">
+
           <button
             onClick={handleMicClick}
             className={`p-6 rounded-full text-white transition ${
-              isMicActive ? "bg-red-500 animate-pulse" : "bg-green-600"
+              isMicActive
+                ? "bg-red-500 animate-pulse"
+                : "bg-green-600"
             }`}
           >
-            {isMicActive ? <MicOff size={30} /> : <Mic size={30} />}
+            {isMicActive
+              ? <MicOff size={30} />
+              : <Mic size={30} />}
           </button>
+
         </div>
+
 
         {/* INPUT */}
         <div className="flex gap-3">
+
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -299,7 +303,9 @@ export default function Chat() {
           >
             <Send size={20} />
           </button>
+
         </div>
+
       </div>
     </div>
   );

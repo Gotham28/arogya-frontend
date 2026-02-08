@@ -9,6 +9,7 @@ import { Message } from "../types/chat";
 
 const BACKEND_URL = "https://arogya-backend-y7d6.onrender.com";
 const SILENCE_DELAY = 1200; // ms
+const MAX_MIC_DURATION = 8000; // 8 seconds safety cutoff
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -16,11 +17,12 @@ export default function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<"en" | "ml" | null>(null);
 
-  // 🔴 Manual mic state (CRITICAL)
+  // 🔴 Manual mic state
   const [isMicActive, setIsMicActive] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const silenceTimer = useRef<NodeJS.Timeout | null>(null);
+  const maxMicTimer = useRef<NodeJS.Timeout | null>(null);
 
   const {
     transcript,
@@ -29,7 +31,7 @@ export default function Chat() {
   } = useSpeechRecognition();
 
   /* -------------------------
-     Welcome message (once)
+     Welcome message
   ------------------------- */
   useEffect(() => {
     if (messages.length === 0) {
@@ -53,8 +55,7 @@ export default function Chat() {
   }, [messages, isLoading]);
 
   /* -------------------------
-     SILENCE-BASED AUTO SEND
-     (MANUAL MIC CONTROL)
+     Silence-based auto send
   ------------------------- */
   useEffect(() => {
     if (!isMicActive || !language) return;
@@ -69,13 +70,17 @@ export default function Chat() {
       const finalText = transcript.trim();
       if (!finalText) return;
 
-      // 🔴 HARD STOP MIC
       SpeechRecognition.stopListening();
       setIsMicActive(false);
 
       if (silenceTimer.current) {
         clearTimeout(silenceTimer.current);
         silenceTimer.current = null;
+      }
+
+      if (maxMicTimer.current) {
+        clearTimeout(maxMicTimer.current);
+        maxMicTimer.current = null;
       }
 
       resetTranscript();
@@ -90,7 +95,7 @@ export default function Chat() {
   }, [transcript]);
 
   /* -------------------------
-     Mic toggle (FIXED)
+     Mic toggle (SAFE)
   ------------------------- */
   const handleMicClick = async () => {
     if (!language) return;
@@ -100,7 +105,7 @@ export default function Chat() {
       return;
     }
 
-    // 🔴 MANUAL STOP
+    // 🔴 Manual stop
     if (isMicActive) {
       SpeechRecognition.stopListening();
       setIsMicActive(false);
@@ -110,18 +115,36 @@ export default function Chat() {
         clearTimeout(silenceTimer.current);
         silenceTimer.current = null;
       }
+
+      if (maxMicTimer.current) {
+        clearTimeout(maxMicTimer.current);
+        maxMicTimer.current = null;
+      }
+
       return;
     }
 
-    // 🔴 MANUAL START
+    // 🔴 Manual start
     resetTranscript();
     setIsMicActive(true);
 
-    await SpeechRecognition.startListening({
-      continuous: language === "en", // Only English is continuous
-      language: language === "ml" ? "ml-IN" : "en-IN",
-      });
+    // ⏱️ Safety cutoff
+    maxMicTimer.current = setTimeout(() => {
+      SpeechRecognition.stopListening();
+      setIsMicActive(false);
 
+      if (maxMicTimer.current) {
+        clearTimeout(maxMicTimer.current);
+        maxMicTimer.current = null;
+      }
+
+      console.log("Mic auto-stopped (safety)");
+    }, MAX_MIC_DURATION);
+
+    await SpeechRecognition.startListening({
+      continuous: language === "en",
+      language: language === "ml" ? "ml-IN" : "en-IN",
+    });
   };
 
   /* -------------------------
@@ -183,10 +206,22 @@ export default function Chat() {
     }
   };
 
-  const instruction =
-    language === "ml"
-      ? "സംസാരിച്ച് നിർത്തുക — സന്ദേശം സ്വയം അയക്കും"
-      : "Speak and pause — message sends automatically";
+  /* -------------------------
+     Instruction text
+  ------------------------- */
+  const instruction = (() => {
+    if (!language) return "";
+
+    if (!isMicActive) {
+      return language === "ml"
+        ? "സംസാരിക്കാൻ മൈക്ക് അമർത്തുക"
+        : "Press the mic to speak";
+    }
+
+    return language === "ml"
+      ? "ഇപ്പോൾ സംസാരിക്കുക"
+      : "Speak now";
+  })();
 
   return (
     <div className="flex flex-col h-screen bg-green-50">
@@ -215,6 +250,7 @@ export default function Chat() {
             >
               English
             </button>
+
             <button
               onClick={() => setLanguage("ml")}
               className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700"
@@ -230,7 +266,7 @@ export default function Chat() {
           </p>
         )}
 
-        {/* MIC BUTTON */}
+        {/* MIC */}
         <div className="flex justify-center mb-4">
           <button
             onClick={handleMicClick}
@@ -255,6 +291,7 @@ export default function Chat() {
                 : "Choose language first 😊"
             }
           />
+
           <button
             onClick={() => sendMessage()}
             disabled={!input.trim() || !language}

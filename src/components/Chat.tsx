@@ -82,6 +82,7 @@ export default function Chat() {
 
         const formData = new FormData();
         formData.append("file", audioBlob, "speech.webm");
+        formData.append("language", language);
 
         setIsLoading(true);
 

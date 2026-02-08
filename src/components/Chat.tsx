@@ -118,9 +118,10 @@ export default function Chat() {
     setIsMicActive(true);
 
     await SpeechRecognition.startListening({
-      continuous: true,
+      continuous: language === "en", // Only English is continuous
       language: language === "ml" ? "ml-IN" : "en-IN",
-    });
+      });
+
   };
 
   /* -------------------------

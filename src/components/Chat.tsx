@@ -7,7 +7,8 @@ import { Message } from "../types/chat";
 
 const BACKEND_URL = "https://arogya-backend-y7d6.onrender.com";
 
-const SILENCE_TIMEOUT = 1500; // 1.5 seconds
+// Stop if silent for 2s
+const SILENCE_TIMEOUT = 2000;
 
 export default function Chat() {
 
@@ -18,8 +19,12 @@ export default function Chat() {
   const [isMicActive, setIsMicActive] = useState(false);
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
+  const mediaStream = useRef<MediaStream | null>(null);
+
   const audioChunks = useRef<Blob[]>([]);
   const silenceTimer = useRef<number | null>(null);
+
+  const isStopping = useRef(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -51,23 +56,21 @@ export default function Chat() {
 
 
   /* -------------------------
-     Cleanup on Unmount
+     Cleanup
   ------------------------- */
   useEffect(() => {
     return () => {
-      stopRecording();
+      forceStop();
     };
   }, []);
 
 
   /* -------------------------
-     Reset Silence Timer
+     Silence Timer
   ------------------------- */
-  const resetSilenceTimer = () => {
+  const startSilenceTimer = () => {
 
-    if (silenceTimer.current) {
-      clearTimeout(silenceTimer.current);
-    }
+    clearSilenceTimer();
 
     silenceTimer.current = window.setTimeout(() => {
       stopRecording();
@@ -75,14 +78,21 @@ export default function Chat() {
   };
 
 
+  const clearSilenceTimer = () => {
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current);
+      silenceTimer.current = null;
+    }
+  };
+
+
   /* -------------------------
-     Start / Stop Recording
+     Start Recording
   ------------------------- */
   const startRecording = async () => {
 
     if (!language || isLoading) return;
 
-    // If already recording → manual stop
     if (isMicActive) {
       stopRecording();
       return;
@@ -90,31 +100,41 @@ export default function Chat() {
 
     try {
 
-      const stream =
-        await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
 
-      const recorder = new MediaRecorder(stream);
+      mediaStream.current = stream;
+
+      const recorder = new MediaRecorder(stream, {
+        mimeType: "audio/webm",
+      });
 
       audioChunks.current = [];
+      isStopping.current = false;
 
-      recorder.ondataavailable = (event) => {
-
-        if (event.data.size > 0) {
-          audioChunks.current.push(event.data);
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunks.current.push(e.data);
         }
-
-        resetSilenceTimer();
       };
 
-      recorder.onstop = processAudio;
 
-      recorder.start(300); // emit chunks every 300ms
+      recorder.onstop = async () => {
+        await processAudio();
+      };
+
+
+      recorder.start();
 
       mediaRecorder.current = recorder;
-
       setIsMicActive(true);
 
-      resetSilenceTimer();
+      startSilenceTimer();
 
     } catch (err) {
       console.error(err);
@@ -124,37 +144,58 @@ export default function Chat() {
 
 
   /* -------------------------
-     Stop Recording
+     Stop Recording (Safe)
   ------------------------- */
   const stopRecording = () => {
 
     if (!mediaRecorder.current) return;
 
+    if (isStopping.current) return;
+
+    isStopping.current = true;
+
     try {
+
+      clearSilenceTimer();
 
       mediaRecorder.current.stop();
 
-      mediaRecorder.current.stream
-        .getTracks()
-        .forEach(track => track.stop());
+      mediaStream.current?.getTracks().forEach(t => t.stop());
 
     } catch (err) {
       console.error(err);
     }
 
     mediaRecorder.current = null;
-
-    if (silenceTimer.current) {
-      clearTimeout(silenceTimer.current);
-      silenceTimer.current = null;
-    }
+    mediaStream.current = null;
 
     setIsMicActive(false);
   };
 
 
   /* -------------------------
-     Send Audio to Whisper
+     Force Stop (Unmount)
+  ------------------------- */
+  const forceStop = () => {
+
+    try {
+      clearSilenceTimer();
+
+      mediaRecorder.current?.stop();
+
+      mediaStream.current?.getTracks().forEach(t => t.stop());
+
+    } catch {}
+
+    mediaRecorder.current = null;
+    mediaStream.current = null;
+
+    setIsMicActive(false);
+  };
+
+
+  /* -------------------------
+     Process Audio
   ------------------------- */
   const processAudio = async () => {
 
@@ -165,6 +206,7 @@ export default function Chat() {
     });
 
     const formData = new FormData();
+
     formData.append("file", audioBlob, "speech.webm");
     formData.append("language", language!);
 
@@ -177,14 +219,12 @@ export default function Chat() {
         body: formData,
       });
 
-      if (!res.ok) {
-        throw new Error("Speech failed");
-      }
+      if (!res.ok) throw new Error("Speech failed");
 
       const data = await res.json();
 
-      if (data.text) {
-        sendMessage(data.text);
+      if (data.text?.trim()) {
+        await sendMessage(data.text);
       }
 
     } catch (err) {
@@ -279,19 +319,25 @@ export default function Chat() {
 
       {/* CHAT */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+
         {messages.map(m => (
           <ChatMessage key={m.id} message={m} />
         ))}
+
         {isLoading && <TypingIndicator />}
+
         <div ref={messagesEndRef} />
+
       </div>
 
 
       {/* CONTROLS */}
       <div className="bg-white border-t px-4 py-5">
 
+        {/* LANGUAGE */}
         {!language && (
           <div className="space-y-4 mb-6">
+
             <button
               onClick={() => setLanguage("en")}
               className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700"
@@ -305,11 +351,15 @@ export default function Chat() {
             >
               മലയാളം
             </button>
+
           </div>
         )}
 
+
+        {/* MIC */}
         {language && (
           <div className="flex justify-center mb-4">
+
             <button
               onClick={startRecording}
               disabled={isLoading}
@@ -321,10 +371,14 @@ export default function Chat() {
             >
               <Mic size={30} />
             </button>
+
           </div>
         )}
 
+
+        {/* INPUT */}
         <div className="flex gap-3">
+
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -344,6 +398,7 @@ export default function Chat() {
           >
             <Send size={20} />
           </button>
+
         </div>
 
       </div>

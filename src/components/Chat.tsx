@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Mic, MicOff, Send } from "lucide-react";
+import { Mic, Send } from "lucide-react";
 
 import ChatMessage from "./ChatMessage";
 import TypingIndicator from "./TypingIndicator";
@@ -7,7 +7,11 @@ import { Message } from "../types/chat";
 
 const BACKEND_URL = "https://arogya-backend-y7d6.onrender.com";
 
+const SILENCE_TIMEOUT = 2000; // 2s of silence → stop
+
+
 export default function Chat() {
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -15,8 +19,10 @@ export default function Chat() {
 
   const [isMicActive, setIsMicActive] = useState(false);
 
+
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
+  const silenceTimer = useRef<NodeJS.Timeout | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -25,7 +31,9 @@ export default function Chat() {
      Welcome
   ------------------------- */
   useEffect(() => {
+
     if (messages.length === 0) {
+
       setMessages([
         {
           id: "welcome",
@@ -35,7 +43,9 @@ export default function Chat() {
           timestamp: new Date(),
         },
       ]);
+
     }
+
   }, []);
 
 
@@ -43,90 +53,161 @@ export default function Chat() {
      Scroll
   ------------------------- */
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+
+    messagesEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+    });
+
   }, [messages, isLoading]);
 
 
   /* -------------------------
-     Mic (Whisper)
+     Auto Stop on Silence
   ------------------------- */
-  const handleMicClick = async () => {
-    if (!language) return;
+  const resetSilenceTimer = () => {
 
-    // STOP
-    if (isMicActive) {
-      mediaRecorder.current?.stop();
-      setIsMicActive(false);
-      return;
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current);
     }
 
+    silenceTimer.current = setTimeout(() => {
+      stopRecording();
+    }, SILENCE_TIMEOUT);
+
+  };
+
+
+  /* -------------------------
+     Start Recording
+  ------------------------- */
+  const startRecording = async () => {
+
+    if (!language || isMicActive) return;
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-      });
+
+      const stream =
+        await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
+
 
       const recorder = new MediaRecorder(stream);
 
       audioChunks.current = [];
 
+
       recorder.ondataavailable = e => {
+
         audioChunks.current.push(e.data);
+
+        resetSilenceTimer(); // reset when sound comes
       };
 
-      recorder.onstop = async () => {
 
-        const audioBlob = new Blob(
-          audioChunks.current,
-          { type: "audio/webm" }
-        );
+      recorder.onstop = processAudio;
 
-        const formData = new FormData();
-        formData.append("file", audioBlob, "speech.webm");
-        formData.append("language", language);
-
-        setIsLoading(true);
-
-        try {
-          const res = await fetch(
-            `${BACKEND_URL}/speech`,
-            {
-              method: "POST",
-              body: formData,
-            }
-          );
-
-          const data = await res.json();
-
-          if (data.text) {
-            sendMessage(data.text);
-          }
-
-        } catch {
-          alert("Voice recognition failed.");
-        } finally {
-          setIsLoading(false);
-        }
-      };
 
       recorder.start();
 
+
       mediaRecorder.current = recorder;
+
       setIsMicActive(true);
 
+      resetSilenceTimer();
+
+
     } catch {
+
       alert("Microphone permission denied.");
+
     }
+
   };
 
 
   /* -------------------------
-     Send
+     Stop Recording
+  ------------------------- */
+  const stopRecording = () => {
+
+    if (!isMicActive) return;
+
+    mediaRecorder.current?.stop();
+
+    setIsMicActive(false);
+
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current);
+    }
+
+  };
+
+
+  /* -------------------------
+     Send Audio → Whisper
+  ------------------------- */
+  const processAudio = async () => {
+
+    if (audioChunks.current.length === 0) return;
+
+    const audioBlob = new Blob(
+      audioChunks.current,
+      { type: "audio/webm" }
+    );
+
+
+    const formData = new FormData();
+
+    formData.append("file", audioBlob, "speech.webm");
+    formData.append("language", language!);
+
+
+    setIsLoading(true);
+
+
+    try {
+
+      const res = await fetch(
+        `${BACKEND_URL}/speech`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+
+      const data = await res.json();
+
+
+      if (data.text) {
+        sendMessage(data.text); // auto send
+      }
+
+
+    } catch {
+
+      alert("Voice recognition failed.");
+
+    } finally {
+
+      setIsLoading(false);
+
+    }
+
+  };
+
+
+  /* -------------------------
+     Send Message
   ------------------------- */
   const sendMessage = async (textOverride?: string) => {
 
     const text = (textOverride ?? input).trim();
 
     if (!text || isLoading || !language) return;
+
 
     setMessages(prev => [
       ...prev,
@@ -138,25 +219,32 @@ export default function Chat() {
       },
     ]);
 
+
     setInput("");
     setIsLoading(true);
 
+
     try {
 
-      const res = await fetch(`${BACKEND_URL}/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Session-ID":
-            sessionStorage.getItem("chat_session_id") || "",
-        },
-        body: JSON.stringify({
-          message: text,
-          language,
-        }),
-      });
+      const res = await fetch(
+        `${BACKEND_URL}/chat`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Session-ID":
+              sessionStorage.getItem("chat_session_id") || "",
+          },
+          body: JSON.stringify({
+            message: text,
+            language,
+          }),
+        }
+      );
+
 
       const data = await res.json();
+
 
       setMessages(prev => [
         ...prev,
@@ -167,6 +255,7 @@ export default function Chat() {
           timestamp: new Date(),
         },
       ]);
+
 
     } catch {
 
@@ -181,8 +270,11 @@ export default function Chat() {
       ]);
 
     } finally {
+
       setIsLoading(false);
+
     }
+
   };
 
 
@@ -200,8 +292,8 @@ export default function Chat() {
     }
 
     return language === "ml"
-      ? "സംസാരിച്ച് കഴിഞ്ഞാൽ വീണ്ടും അമർത്തുക"
-      : "Press again to send";
+      ? "സംസാരിക്കുക…"
+      : "Listening…";
 
   })();
 
@@ -209,12 +301,18 @@ export default function Chat() {
   return (
     <div className="flex flex-col h-screen bg-green-50">
 
+
       {/* HEADER */}
       <header className="bg-green-700 text-white px-6 py-6 shadow">
-        <h1 className="text-3xl font-bold">Arogya</h1>
+
+        <h1 className="text-3xl font-bold">
+          Arogya
+        </h1>
+
         <p className="text-green-200">
           Your trusted hospital assistant
         </p>
+
       </header>
 
 
@@ -222,7 +320,10 @@ export default function Chat() {
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
 
         {messages.map(m => (
-          <ChatMessage key={m.id} message={m} />
+          <ChatMessage
+            key={m.id}
+            message={m}
+          />
         ))}
 
         {isLoading && <TypingIndicator />}
@@ -235,7 +336,10 @@ export default function Chat() {
       {/* CONTROLS */}
       <div className="bg-white border-t px-4 py-5">
 
+
+        {/* LANGUAGE */}
         {!language && (
+
           <div className="space-y-4 mb-6">
 
             <button
@@ -253,33 +357,40 @@ export default function Chat() {
             </button>
 
           </div>
+
         )}
 
 
+        {/* INSTRUCTION */}
         {language && (
+
           <p className="text-center text-green-700 text-sm mb-3">
             {instruction}
           </p>
+
         )}
 
 
-        {/* MIC */}
-        <div className="flex justify-center mb-4">
+        {/* MIC (ONLY AFTER LANGUAGE) */}
+        {language && (
 
-          <button
-            onClick={handleMicClick}
-            className={`p-6 rounded-full text-white transition ${
-              isMicActive
-                ? "bg-red-500 animate-pulse"
-                : "bg-green-600"
-            }`}
-          >
-            {isMicActive
-              ? <MicOff size={30} />
-              : <Mic size={30} />}
-          </button>
+          <div className="flex justify-center mb-4">
 
-        </div>
+            <button
+              onClick={startRecording}
+              disabled={isMicActive}
+              className={`p-6 rounded-full text-white transition ${
+                isMicActive
+                  ? "bg-red-500 animate-pulse"
+                  : "bg-green-600"
+              }`}
+            >
+              <Mic size={30} />
+            </button>
+
+          </div>
+
+        )}
 
 
         {/* INPUT */}
@@ -297,6 +408,7 @@ export default function Chat() {
             }
           />
 
+
           <button
             onClick={() => sendMessage()}
             disabled={!input.trim() || !language}
@@ -308,6 +420,7 @@ export default function Chat() {
         </div>
 
       </div>
+
     </div>
   );
 }

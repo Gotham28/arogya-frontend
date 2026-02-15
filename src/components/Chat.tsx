@@ -72,79 +72,87 @@ export default function Chat() {
 
   /* ---------------- Start Recording ---------------- */
 
-  const startRecording = async () => {
+const startRecording = async () => {
 
-    if (!language || isLoading) return;
+  if (!language || isLoading) return;
 
-    if (isMicActive) {
-      stopRecording();
-      return;
+  if (isMicActive) {
+    stopRecording();
+    return;
+  }
+
+  try {
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+      },
+    });
+
+    mediaStream.current = stream;
+
+
+    // ---------- Audio Context ----------
+
+    audioContext.current = new AudioContext();
+
+    if (audioContext.current.state === "suspended") {
+      await audioContext.current.resume();
     }
 
-    try {
+    const source =
+      audioContext.current.createMediaStreamSource(stream);
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: false,
-          autoGainControl: false,
-          channelCount: 1,
-        },
-      });
+    analyser.current =
+      audioContext.current.createAnalyser();
 
-      mediaStream.current = stream;
+    analyser.current.fftSize = 2048;
 
+    source.connect(analyser.current);
 
-      /* ---- Audio analyser (VAD) ---- */
-
-      audioContext.current = new AudioContext();
-
-      const source =
-        audioContext.current.createMediaStreamSource(stream);
-
-      analyser.current =
-        audioContext.current.createAnalyser();
-
-      analyser.current.fftSize = 2048;
-
-      source.connect(analyser.current);
-
-      dataArray.current =
-        new Uint8Array(analyser.current.fftSize);
+    dataArray.current =
+      new Uint8Array(analyser.current.fftSize);
 
 
-      /* ---- Recorder ---- */
+    // ---------- Recorder ----------
 
-      const recorder = new MediaRecorder(stream);
+    const recorder = new MediaRecorder(stream);
 
-      audioChunks.current = [];
-      isStopping.current = false;
-      silentFrames.current = 0;
+    // Proper reset
+    audioChunks.current.length = 0;
 
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunks.current.push(e.data);
-        }
-      };
+    isStopping.current = false;
+    silentFrames.current = 0;
 
 
-      recorder.onstop = processAudio;
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        audioChunks.current.push(e.data);
+      }
+    };
+
+    recorder.onstop = processAudio;
 
 
-      recorder.start();
+    // Warmup delay (VERY important)
+    await new Promise(r => setTimeout(r, 300));
 
-      mediaRecorder.current = recorder;
+    recorder.start();
 
-      setIsMicActive(true);
+    mediaRecorder.current = recorder;
 
-      detectSilence();
+    setIsMicActive(true);
 
-    } catch (err) {
-      console.error(err);
-      alert("Microphone permission denied.");
-    }
-  };
+    detectSilence();
+
+  } catch (err) {
+    console.error(err);
+    alert("Microphone permission denied.");
+  }
+};
 
 
   /* ---------------- Voice Activity Detection ---------------- */

@@ -7,10 +7,9 @@ import { Message } from "../types/chat";
 
 const BACKEND_URL = "https://arogya-backend-y7d6.onrender.com";
 
-// Stop if silent for 2s
-const SILENCE_TIMEOUT = 2000;
-
 export default function Chat() {
+
+  /* ---------------- State ---------------- */
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -18,25 +17,28 @@ export default function Chat() {
   const [language, setLanguage] = useState<"en" | "ml" | null>(null);
   const [isMicActive, setIsMicActive] = useState(false);
 
+
+  /* ---------------- Refs ---------------- */
+
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const mediaStream = useRef<MediaStream | null>(null);
+
   const audioContext = useRef<AudioContext | null>(null);
   const analyser = useRef<AnalyserNode | null>(null);
   const dataArray = useRef<Uint8Array | null>(null);
+
   const animationFrame = useRef<number | null>(null);
 
-
   const audioChunks = useRef<Blob[]>([]);
-  const silenceTimer = useRef<number | null>(null);
 
   const isStopping = useRef(false);
+  const silentFrames = useRef(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
 
-  /* -------------------------
-     Welcome
-  ------------------------- */
+  /* ---------------- Welcome ---------------- */
+
   useEffect(() => {
     if (messages.length === 0) {
       setMessages([
@@ -52,17 +54,15 @@ export default function Chat() {
   }, []);
 
 
-  /* -------------------------
-     Scroll
-  ------------------------- */
+  /* ---------------- Auto Scroll ---------------- */
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
 
-  /* -------------------------
-     Cleanup
-  ------------------------- */
+  /* ---------------- Cleanup ---------------- */
+
   useEffect(() => {
     return () => {
       forceStop();
@@ -70,133 +70,135 @@ export default function Chat() {
   }, []);
 
 
-  /* -------------------------
-     Silence Timer
-  ------------------------- */
-  const startSilenceTimer = () => {
+  /* ---------------- Start Recording ---------------- */
 
-    clearSilenceTimer();
-
-    silenceTimer.current = window.setTimeout(() => {
-      stopRecording();
-    }, SILENCE_TIMEOUT);
-  };
-
-
-  const clearSilenceTimer = () => {
-    if (silenceTimer.current) {
-      clearTimeout(silenceTimer.current);
-      silenceTimer.current = null;
-    }
-  };
-
-
-  /* -------------------------
-     Start Recording
-  ------------------------- */
   const startRecording = async () => {
 
-  if (!language || isLoading) return;
+    if (!language || isLoading) return;
 
-  if (isMicActive) {
-    stopRecording();
-    return;
-  }
-
-  try {
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-
-    mediaStream.current = stream;
-
-    // ---- Voice Activity Detection Setup ----
-    audioContext.current = new AudioContext();
-    const source = audioContext.current.createMediaStreamSource(stream);
-
-    analyser.current = audioContext.current.createAnalyser();
-    analyser.current.fftSize = 2048;
-
-    source.connect(analyser.current);
-
-    dataArray.current = new Uint8Array(analyser.current.fftSize);
-
-    const recorder = new MediaRecorder(stream);
-    audioChunks.current = [];
-    isStopping.current = false;
-
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        audioChunks.current.push(e.data);
-      }
-    };
-
-    recorder.onstop = processAudio;
-
-    recorder.start();
-
-    mediaRecorder.current = recorder;
-    setIsMicActive(true);
-
-    detectSilence(); // Start monitoring voice
-
-  } catch (err) {
-    console.error(err);
-    alert("Microphone permission denied.");
-  }
-};
-const detectSilence = () => {
-
-  if (!analyser.current || !dataArray.current) return;
-
-  analyser.current.getByteTimeDomainData(dataArray.current);
-
-  let sum = 0;
-
-  for (let i = 0; i < dataArray.current.length; i++) {
-    const val = (dataArray.current[i] - 128) / 128;
-    sum += val * val;
-  }
-
-  const volume = Math.sqrt(sum / dataArray.current.length);
-
-  // If volume below threshold → silent
-  if (volume < 0.01) {
-
-    if (!silenceTimer.current) {
-      silenceTimer.current = window.setTimeout(() => {
-        stopRecording();
-      }, 2000); // 2 seconds of silence
+    if (isMicActive) {
+      stopRecording();
+      return;
     }
 
-  } else {
-    clearSilenceTimer();
-  }
+    try {
 
-  animationFrame.current = requestAnimationFrame(detectSilence);
-};
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1,
+        },
+      });
+
+      mediaStream.current = stream;
 
 
+      /* ---- Audio analyser (VAD) ---- */
 
-  /* -------------------------
-     Stop Recording (Safe)
-  ------------------------- */
+      audioContext.current = new AudioContext();
+
+      const source =
+        audioContext.current.createMediaStreamSource(stream);
+
+      analyser.current =
+        audioContext.current.createAnalyser();
+
+      analyser.current.fftSize = 2048;
+
+      source.connect(analyser.current);
+
+      dataArray.current =
+        new Uint8Array(analyser.current.fftSize);
+
+
+      /* ---- Recorder ---- */
+
+      const recorder = new MediaRecorder(stream);
+
+      audioChunks.current = [];
+      isStopping.current = false;
+      silentFrames.current = 0;
+
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunks.current.push(e.data);
+        }
+      };
+
+
+      recorder.onstop = processAudio;
+
+
+      recorder.start();
+
+      mediaRecorder.current = recorder;
+
+      setIsMicActive(true);
+
+      detectSilence();
+
+    } catch (err) {
+      console.error(err);
+      alert("Microphone permission denied.");
+    }
+  };
+
+
+  /* ---------------- Voice Activity Detection ---------------- */
+
+  const detectSilence = () => {
+
+    if (!analyser.current || !dataArray.current) return;
+
+    analyser.current.getByteTimeDomainData(dataArray.current);
+
+    let sum = 0;
+
+    for (let i = 0; i < dataArray.current.length; i++) {
+      const v = (dataArray.current[i] - 128) / 128;
+      sum += v * v;
+    }
+
+    const rms = Math.sqrt(sum / dataArray.current.length);
+
+
+    /* Tuned for mobile + Indian accents */
+
+    const SILENCE_THRESHOLD = 0.02;
+    const SILENT_FRAMES_LIMIT = 60; // ~3 seconds
+
+
+    if (rms < SILENCE_THRESHOLD) {
+      silentFrames.current += 1;
+    } else {
+      silentFrames.current = 0;
+    }
+
+
+    if (silentFrames.current > SILENT_FRAMES_LIMIT) {
+      stopRecording();
+      return;
+    }
+
+
+    animationFrame.current =
+      requestAnimationFrame(detectSilence);
+  };
+
+
+  /* ---------------- Stop Recording ---------------- */
+
   const stopRecording = () => {
 
     if (!mediaRecorder.current) return;
-
     if (isStopping.current) return;
 
     isStopping.current = true;
 
     try {
-
-      clearSilenceTimer();
 
       mediaRecorder.current.stop();
 
@@ -206,29 +208,33 @@ const detectSilence = () => {
       console.error(err);
     }
 
+
+    if (animationFrame.current) {
+      cancelAnimationFrame(animationFrame.current);
+      animationFrame.current = null;
+    }
+
+
+    audioContext.current?.close();
+
+    audioContext.current = null;
+    analyser.current = null;
+    dataArray.current = null;
+
     mediaRecorder.current = null;
     mediaStream.current = null;
 
+    silentFrames.current = 0;
+
     setIsMicActive(false);
   };
-if (animationFrame.current) {
-  cancelAnimationFrame(animationFrame.current);
-  animationFrame.current = null;
-}
-
-audioContext.current?.close();
-audioContext.current = null;
-analyser.current = null;
-dataArray.current = null;
 
 
-  /* -------------------------
-     Force Stop (Unmount)
-  ------------------------- */
+  /* ---------------- Force Stop ---------------- */
+
   const forceStop = () => {
 
     try {
-      clearSilenceTimer();
 
       mediaRecorder.current?.stop();
 
@@ -236,16 +242,23 @@ dataArray.current = null;
 
     } catch {}
 
+    if (animationFrame.current) {
+      cancelAnimationFrame(animationFrame.current);
+    }
+
+    audioContext.current?.close();
+
     mediaRecorder.current = null;
     mediaStream.current = null;
+
+    animationFrame.current = null;
 
     setIsMicActive(false);
   };
 
 
-  /* -------------------------
-     Process Audio
-  ------------------------- */
+  /* ---------------- Process Audio ---------------- */
+
   const processAudio = async () => {
 
     if (audioChunks.current.length === 0) return;
@@ -254,10 +267,12 @@ dataArray.current = null;
       type: "audio/webm",
     });
 
+
     const formData = new FormData();
 
     formData.append("file", audioBlob, "speech.webm");
     formData.append("language", language!);
+
 
     setIsLoading(true);
 
@@ -285,14 +300,14 @@ dataArray.current = null;
   };
 
 
-  /* -------------------------
-     Send Message
-  ------------------------- */
+  /* ---------------- Send Message ---------------- */
+
   const sendMessage = async (textOverride?: string) => {
 
     const text = (textOverride ?? input).trim();
 
     if (!text || isLoading || !language) return;
+
 
     setMessages(prev => [
       ...prev,
@@ -304,8 +319,10 @@ dataArray.current = null;
       },
     ]);
 
+
     setInput("");
     setIsLoading(true);
+
 
     try {
 
@@ -322,7 +339,9 @@ dataArray.current = null;
         }),
       });
 
+
       const data = await res.json();
+
 
       setMessages(prev => [
         ...prev,
@@ -354,8 +373,11 @@ dataArray.current = null;
   };
 
 
+  /* ---------------- UI ---------------- */
+
   return (
     <div className="flex flex-col h-screen bg-green-50">
+
 
       {/* HEADER */}
       <header className="bg-green-700 text-white px-6 py-6 shadow">
@@ -382,6 +404,7 @@ dataArray.current = null;
 
       {/* CONTROLS */}
       <div className="bg-white border-t px-4 py-5">
+
 
         {/* LANGUAGE */}
         {!language && (

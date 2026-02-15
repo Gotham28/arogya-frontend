@@ -7,6 +7,11 @@ import { Message } from "../types/chat";
 
 const BACKEND_URL = "https://arogya-backend-y7d6.onrender.com";
 
+/* Timing (mobile friendly) */
+const MIN_RECORD_TIME = 1200; // ms
+const SILENT_FRAMES_LIMIT = 80; // ~4s
+const SILENCE_THRESHOLD = 0.018;
+
 export default function Chat() {
 
   /* ---------------- State ---------------- */
@@ -31,8 +36,10 @@ export default function Chat() {
 
   const audioChunks = useRef<Blob[]>([]);
 
-  const isStopping = useRef(false);
   const silentFrames = useRef(0);
+  const isStopping = useRef(false);
+
+  const recordStartTime = useRef(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -40,7 +47,9 @@ export default function Chat() {
   /* ---------------- Welcome ---------------- */
 
   useEffect(() => {
+
     if (messages.length === 0) {
+
       setMessages([
         {
           id: "welcome",
@@ -51,6 +60,7 @@ export default function Chat() {
         },
       ]);
     }
+
   }, []);
 
 
@@ -70,92 +80,119 @@ export default function Chat() {
   }, []);
 
 
-  /* ---------------- Start Recording ---------------- */
+  /* ---------------- Instruction ---------------- */
 
-const startRecording = async () => {
+  const instruction = (() => {
 
-  if (!language || isLoading) return;
+    if (!language) return "";
 
-  if (isMicActive) {
-    stopRecording();
-    return;
-  }
-
-  try {
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-      },
-    });
-
-    mediaStream.current = stream;
-
-
-    // ---------- Audio Context ----------
-
-    audioContext.current = new AudioContext();
-
-    if (audioContext.current.state === "suspended") {
-      await audioContext.current.resume();
+    if (!isMicActive) {
+      return language === "ml"
+        ? "സംസാരിക്കാൻ മൈക്ക് അമർത്തുക"
+        : "Press mic to speak";
     }
 
-    const source =
-      audioContext.current.createMediaStreamSource(stream);
+    return language === "ml"
+      ? "സംസാരിച്ച് കഴിഞ്ഞാൽ നിർത്തുക"
+      : "Speaking... pause to send";
 
-    analyser.current =
-      audioContext.current.createAnalyser();
-
-    analyser.current.fftSize = 2048;
-
-    source.connect(analyser.current);
-
-    dataArray.current =
-      new Uint8Array(analyser.current.fftSize);
+  })();
 
 
-    // ---------- Recorder ----------
+  /* ---------------- Start Recording ---------------- */
 
-    const recorder = new MediaRecorder(stream);
+  const startRecording = async () => {
 
-    // Proper reset
-    audioChunks.current.length = 0;
+    if (!language || isLoading) return;
 
-    isStopping.current = false;
-    silentFrames.current = 0;
+    if (isMicActive) {
+      stopRecording();
+      return;
+    }
+
+    try {
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1,
+        },
+      });
+
+      mediaStream.current = stream;
 
 
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        audioChunks.current.push(e.data);
+      /* Audio Context */
+
+      audioContext.current = new AudioContext();
+
+      if (audioContext.current.state === "suspended") {
+        await audioContext.current.resume();
       }
-    };
 
-    recorder.onstop = processAudio;
+      const source =
+        audioContext.current.createMediaStreamSource(stream);
 
+      analyser.current =
+        audioContext.current.createAnalyser();
 
-    // Warmup delay (VERY important)
-    await new Promise(r => setTimeout(r, 300));
+      analyser.current.fftSize = 2048;
 
-    recorder.start();
+      source.connect(analyser.current);
 
-    mediaRecorder.current = recorder;
-
-    setIsMicActive(true);
-
-    detectSilence();
-
-  } catch (err) {
-    console.error(err);
-    alert("Microphone permission denied.");
-  }
-};
+      dataArray.current =
+        new Uint8Array(analyser.current.fftSize);
 
 
-  /* ---------------- Voice Activity Detection ---------------- */
+      /* Recorder */
+
+      const recorder = new MediaRecorder(stream);
+
+      audioChunks.current = [];
+
+      silentFrames.current = 0;
+      isStopping.current = false;
+
+      recorder.ondataavailable = e => {
+        if (e.data.size > 0) {
+          audioChunks.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = processAudio;
+
+
+      /* Stabilize mic first */
+      await new Promise(r => setTimeout(r, 500));
+
+
+      recorder.start();
+
+      recordStartTime.current = Date.now();
+
+      mediaRecorder.current = recorder;
+
+      setIsMicActive(true);
+
+
+      /* Delay silence detection */
+      setTimeout(() => {
+        detectSilence();
+      }, 600);
+
+
+    } catch (err) {
+
+      console.error(err);
+      alert("Microphone permission denied.");
+
+    }
+  };
+
+
+  /* ---------------- Silence Detection ---------------- */
 
   const detectSilence = () => {
 
@@ -173,12 +210,6 @@ const startRecording = async () => {
     const rms = Math.sqrt(sum / dataArray.current.length);
 
 
-    /* Tuned for mobile + Indian accents */
-
-    const SILENCE_THRESHOLD = 0.02;
-    const SILENT_FRAMES_LIMIT = 60; // ~3 seconds
-
-
     if (rms < SILENCE_THRESHOLD) {
       silentFrames.current += 1;
     } else {
@@ -186,7 +217,14 @@ const startRecording = async () => {
     }
 
 
-    if (silentFrames.current > SILENT_FRAMES_LIMIT) {
+    const elapsed =
+      Date.now() - recordStartTime.current;
+
+
+    if (
+      silentFrames.current > SILENT_FRAMES_LIMIT &&
+      elapsed > MIN_RECORD_TIME
+    ) {
       stopRecording();
       return;
     }
@@ -295,15 +333,33 @@ const startRecording = async () => {
 
       const data = await res.json();
 
-      if (data.text?.trim()) {
-        await sendMessage(data.text);
+
+      if (data.original?.trim()) {
+
+        /* Show Malayalam */
+        setMessages(prev => [
+          ...prev,
+          {
+            id: Date.now().toString(),
+            sender: "user",
+            text: data.original,
+            timestamp: new Date(),
+          },
+        ]);
+
+        /* Send English */
+        await sendMessage(data.processed);
       }
 
     } catch (err) {
+
       console.error(err);
       alert("Voice recognition failed.");
+
     } finally {
+
       setIsLoading(false);
+
     }
   };
 
@@ -317,15 +373,19 @@ const startRecording = async () => {
     if (!text || isLoading || !language) return;
 
 
-    setMessages(prev => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        sender: "user",
-        text,
-        timestamp: new Date(),
-      },
-    ]);
+    /* Add only for typing */
+    if (!textOverride) {
+
+      setMessages(prev => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          sender: "user",
+          text,
+          timestamp: new Date(),
+        },
+      ]);
+    }
 
 
     setInput("");
@@ -376,7 +436,9 @@ const startRecording = async () => {
       ]);
 
     } finally {
+
       setIsLoading(false);
+
     }
   };
 
@@ -433,6 +495,14 @@ const startRecording = async () => {
             </button>
 
           </div>
+        )}
+
+
+        {/* Instruction */}
+        {language && (
+          <p className="text-center text-green-700 text-sm mb-2">
+            {instruction}
+          </p>
         )}
 
 

@@ -5,15 +5,9 @@ import ChatMessage from "./ChatMessage";
 import TypingIndicator from "./TypingIndicator";
 import { Message } from "../types/chat";
 
-
 const BACKEND_URL = "https://arogya-backend-y7d6.onrender.com";
 
-
-// Silence detection tuning
-const SILENCE_THRESHOLD = 0.02;   // lower = more sensitive
-const SILENCE_DURATION = 2000;   // ms
-
-
+const SILENCE_TIMEOUT = 1500; // 1.5 seconds
 
 export default function Chat() {
 
@@ -21,20 +15,11 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<"en" | "ml" | null>(null);
-
   const [isMicActive, setIsMicActive] = useState(false);
 
-
-  // Audio refs
   const mediaRecorder = useRef<MediaRecorder | null>(null);
-  const audioContext = useRef<AudioContext | null>(null);
-  const analyser = useRef<AnalyserNode | null>(null);
-  const silenceTimer = useRef<number | null>(null);
-
   const audioChunks = useRef<Blob[]>([]);
-
-  const rafId = useRef<number | null>(null);
-
+  const silenceTimer = useRef<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -43,9 +28,7 @@ export default function Chat() {
      Welcome
   ------------------------- */
   useEffect(() => {
-
     if (messages.length === 0) {
-
       setMessages([
         {
           id: "welcome",
@@ -55,9 +38,7 @@ export default function Chat() {
           timestamp: new Date(),
         },
       ]);
-
     }
-
   }, []);
 
 
@@ -65,11 +46,7 @@ export default function Chat() {
      Scroll
   ------------------------- */
   useEffect(() => {
-
-    messagesEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-    });
-
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
 
@@ -77,147 +54,72 @@ export default function Chat() {
      Cleanup on Unmount
   ------------------------- */
   useEffect(() => {
-
     return () => {
       stopRecording();
     };
-
   }, []);
 
 
   /* -------------------------
-     Start Recording
+     Reset Silence Timer
+  ------------------------- */
+  const resetSilenceTimer = () => {
+
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current);
+    }
+
+    silenceTimer.current = window.setTimeout(() => {
+      stopRecording();
+    }, SILENCE_TIMEOUT);
+  };
+
+
+  /* -------------------------
+     Start / Stop Recording
   ------------------------- */
   const startRecording = async () => {
 
-    if (!language || isMicActive || isLoading) return;
+    if (!language || isLoading) return;
+
+    // If already recording → manual stop
+    if (isMicActive) {
+      stopRecording();
+      return;
+    }
 
     try {
 
       const stream =
-        await navigator.mediaDevices.getUserMedia({
-          audio: true,
-        });
-
-
-      /* AUDIO CONTEXT */
-
-      audioContext.current = new AudioContext();
-
-      const source =
-        audioContext.current.createMediaStreamSource(stream);
-
-
-      analyser.current =
-        audioContext.current.createAnalyser();
-
-      analyser.current.fftSize = 512;
-
-      source.connect(analyser.current);
-
-
-      /* MEDIA RECORDER */
+        await navigator.mediaDevices.getUserMedia({ audio: true });
 
       const recorder = new MediaRecorder(stream);
 
       audioChunks.current = [];
 
+      recorder.ondataavailable = (event) => {
 
-      recorder.ondataavailable = e => {
-        if (e.data.size > 0) {
-          audioChunks.current.push(e.data);
+        if (event.data.size > 0) {
+          audioChunks.current.push(event.data);
         }
-      };
 
+        resetSilenceTimer();
+      };
 
       recorder.onstop = processAudio;
 
-
-      recorder.start();
-
+      recorder.start(300); // emit chunks every 300ms
 
       mediaRecorder.current = recorder;
 
       setIsMicActive(true);
 
-
-      monitorSilence();
-
+      resetSilenceTimer();
 
     } catch (err) {
-
       console.error(err);
-
       alert("Microphone permission denied.");
-
     }
-  };
-
-
-  /* -------------------------
-     Monitor Silence
-  ------------------------- */
-  const monitorSilence = () => {
-
-    if (!analyser.current) return;
-
-
-    const data = new Uint8Array(
-      analyser.current.frequencyBinCount
-    );
-
-
-    const check = () => {
-
-      if (!isMicActive || !analyser.current) return;
-
-
-      analyser.current.getByteFrequencyData(data);
-
-
-      let sum = 0;
-
-      for (let i = 0; i < data.length; i++) {
-        sum += data[i];
-      }
-
-
-      const volume =
-        sum / data.length / 255;
-
-
-      // Silence detected
-      if (volume < SILENCE_THRESHOLD) {
-
-        if (!silenceTimer.current) {
-
-          silenceTimer.current =
-            window.setTimeout(() => {
-              stopRecording();
-            }, SILENCE_DURATION);
-
-        }
-
-      } else {
-
-        // Speaking → reset timer
-        if (silenceTimer.current) {
-
-          clearTimeout(silenceTimer.current);
-
-          silenceTimer.current = null;
-
-        }
-      }
-
-
-      rafId.current =
-        requestAnimationFrame(check);
-    };
-
-
-    rafId.current =
-      requestAnimationFrame(check);
   };
 
 
@@ -226,111 +128,70 @@ export default function Chat() {
   ------------------------- */
   const stopRecording = () => {
 
-    if (!isMicActive) return;
-
+    if (!mediaRecorder.current) return;
 
     try {
 
-      mediaRecorder.current?.stop();
+      mediaRecorder.current.stop();
 
-
-      mediaRecorder.current?.stream
+      mediaRecorder.current.stream
         .getTracks()
-        .forEach(t => t.stop());
+        .forEach(track => track.stop());
 
-
-      audioContext.current?.close();
-
-
-    } catch {}
-
+    } catch (err) {
+      console.error(err);
+    }
 
     mediaRecorder.current = null;
-    audioContext.current = null;
-    analyser.current = null;
-
 
     if (silenceTimer.current) {
-
       clearTimeout(silenceTimer.current);
-
       silenceTimer.current = null;
-
     }
-
-
-    if (rafId.current) {
-
-      cancelAnimationFrame(rafId.current);
-
-      rafId.current = null;
-
-    }
-
 
     setIsMicActive(false);
   };
 
 
   /* -------------------------
-     Process Audio → Whisper
+     Send Audio to Whisper
   ------------------------- */
   const processAudio = async () => {
 
     if (audioChunks.current.length === 0) return;
 
-
-    const audioBlob = new Blob(
-      audioChunks.current,
-      { type: "audio/webm" }
-    );
-
+    const audioBlob = new Blob(audioChunks.current, {
+      type: "audio/webm",
+    });
 
     const formData = new FormData();
-
     formData.append("file", audioBlob, "speech.webm");
     formData.append("language", language!);
 
-
     setIsLoading(true);
-
 
     try {
 
-      const res = await fetch(
-        `${BACKEND_URL}/speech`,
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
-
+      const res = await fetch(`${BACKEND_URL}/speech`, {
+        method: "POST",
+        body: formData,
+      });
 
       if (!res.ok) {
-        throw new Error("Whisper failed");
+        throw new Error("Speech failed");
       }
-
 
       const data = await res.json();
 
-
       if (data.text) {
-
         sendMessage(data.text);
-
       }
 
-
     } catch (err) {
-
       console.error(err);
-
       alert("Voice recognition failed.");
-
     } finally {
-
       setIsLoading(false);
-
     }
   };
 
@@ -344,7 +205,6 @@ export default function Chat() {
 
     if (!text || isLoading || !language) return;
 
-
     setMessages(prev => [
       ...prev,
       {
@@ -355,38 +215,25 @@ export default function Chat() {
       },
     ]);
 
-
     setInput("");
-
     setIsLoading(true);
-
 
     try {
 
-      const res = await fetch(
-        `${BACKEND_URL}/chat`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Session-ID":
-              sessionStorage.getItem("chat_session_id") || "",
-          },
-          body: JSON.stringify({
-            message: text,
-            language,
-          }),
-        }
-      );
-
-
-      if (!res.ok) {
-        throw new Error("Chat failed");
-      }
-
+      const res = await fetch(`${BACKEND_URL}/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-ID":
+            sessionStorage.getItem("chat_session_id") || "",
+        },
+        body: JSON.stringify({
+          message: text,
+          language,
+        }),
+      });
 
       const data = await res.json();
-
 
       setMessages(prev => [
         ...prev,
@@ -397,7 +244,6 @@ export default function Chat() {
           timestamp: new Date(),
         },
       ]);
-
 
     } catch (err) {
 
@@ -414,79 +260,38 @@ export default function Chat() {
       ]);
 
     } finally {
-
       setIsLoading(false);
-
     }
   };
-
-
-  /* -------------------------
-     Instruction
-  ------------------------- */
-  const instruction = (() => {
-
-    if (!language) return "";
-
-    if (!isMicActive) {
-
-      return language === "ml"
-        ? "സംസാരിക്കാൻ മൈക്ക് അമർത്തുക"
-        : "Tap mic to speak";
-
-    }
-
-    return language === "ml"
-      ? "സംസാരിക്കുക…"
-      : "Listening…";
-
-  })();
 
 
   return (
     <div className="flex flex-col h-screen bg-green-50">
 
-
       {/* HEADER */}
       <header className="bg-green-700 text-white px-6 py-6 shadow">
-
-        <h1 className="text-3xl font-bold">
-          Arogya
-        </h1>
-
+        <h1 className="text-3xl font-bold">Arogya</h1>
         <p className="text-green-200">
           Your trusted hospital assistant
         </p>
-
       </header>
 
 
       {/* CHAT */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
-
         {messages.map(m => (
-          <ChatMessage
-            key={m.id}
-            message={m}
-          />
+          <ChatMessage key={m.id} message={m} />
         ))}
-
         {isLoading && <TypingIndicator />}
-
         <div ref={messagesEndRef} />
-
       </div>
 
 
       {/* CONTROLS */}
       <div className="bg-white border-t px-4 py-5">
 
-
-        {/* LANGUAGE */}
         {!language && (
-
           <div className="space-y-4 mb-6">
-
             <button
               onClick={() => setLanguage("en")}
               className="w-full py-4 border-2 border-green-600 rounded-2xl text-xl font-semibold text-green-700"
@@ -500,30 +305,14 @@ export default function Chat() {
             >
               മലയാളം
             </button>
-
           </div>
-
         )}
 
-
-        {/* INSTRUCTION */}
         {language && (
-
-          <p className="text-center text-green-700 text-sm mb-3">
-            {instruction}
-          </p>
-
-        )}
-
-
-        {/* MIC (ONLY AFTER LANGUAGE) */}
-        {language && (
-
           <div className="flex justify-center mb-4">
-
             <button
               onClick={startRecording}
-              disabled={isMicActive || isLoading}
+              disabled={isLoading}
               className={`p-6 rounded-full text-white transition ${
                 isMicActive
                   ? "bg-red-500 animate-pulse"
@@ -532,15 +321,10 @@ export default function Chat() {
             >
               <Mic size={30} />
             </button>
-
           </div>
-
         )}
 
-
-        {/* INPUT */}
         <div className="flex gap-3">
-
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -553,7 +337,6 @@ export default function Chat() {
             }
           />
 
-
           <button
             onClick={() => sendMessage()}
             disabled={!input.trim() || !language || isLoading}
@@ -561,11 +344,9 @@ export default function Chat() {
           >
             <Send size={20} />
           </button>
-
         </div>
 
       </div>
-
     </div>
   );
 }

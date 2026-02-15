@@ -20,6 +20,11 @@ export default function Chat() {
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const mediaStream = useRef<MediaStream | null>(null);
+  const audioContext = useRef<AudioContext | null>(null);
+  const analyser = useRef<AnalyserNode | null>(null);
+  const dataArray = useRef<Uint8Array | null>(null);
+  const animationFrame = useRef<number | null>(null);
+
 
   const audioChunks = useRef<Blob[]>([]);
   const silenceTimer = useRef<number | null>(null);
@@ -91,56 +96,91 @@ export default function Chat() {
   ------------------------- */
   const startRecording = async () => {
 
-    if (!language || isLoading) return;
+  if (!language || isLoading) return;
 
-    if (isMicActive) {
-      stopRecording();
-      return;
+  if (isMicActive) {
+    stopRecording();
+    return;
+  }
+
+  try {
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    mediaStream.current = stream;
+
+    // ---- Voice Activity Detection Setup ----
+    audioContext.current = new AudioContext();
+    const source = audioContext.current.createMediaStreamSource(stream);
+
+    analyser.current = audioContext.current.createAnalyser();
+    analyser.current.fftSize = 2048;
+
+    source.connect(analyser.current);
+
+    dataArray.current = new Uint8Array(analyser.current.fftSize);
+
+    const recorder = new MediaRecorder(stream);
+    audioChunks.current = [];
+    isStopping.current = false;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        audioChunks.current.push(e.data);
+      }
+    };
+
+    recorder.onstop = processAudio;
+
+    recorder.start();
+
+    mediaRecorder.current = recorder;
+    setIsMicActive(true);
+
+    detectSilence(); // Start monitoring voice
+
+  } catch (err) {
+    console.error(err);
+    alert("Microphone permission denied.");
+  }
+};
+const detectSilence = () => {
+
+  if (!analyser.current || !dataArray.current) return;
+
+  analyser.current.getByteTimeDomainData(dataArray.current);
+
+  let sum = 0;
+
+  for (let i = 0; i < dataArray.current.length; i++) {
+    const val = (dataArray.current[i] - 128) / 128;
+    sum += val * val;
+  }
+
+  const volume = Math.sqrt(sum / dataArray.current.length);
+
+  // If volume below threshold → silent
+  if (volume < 0.01) {
+
+    if (!silenceTimer.current) {
+      silenceTimer.current = window.setTimeout(() => {
+        stopRecording();
+      }, 2000); // 2 seconds of silence
     }
 
-    try {
+  } else {
+    clearSilenceTimer();
+  }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+  animationFrame.current = requestAnimationFrame(detectSilence);
+};
 
-      mediaStream.current = stream;
-
-      const recorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm",
-      });
-
-      audioChunks.current = [];
-      isStopping.current = false;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunks.current.push(e.data);
-        }
-      };
-
-
-      recorder.onstop = async () => {
-        await processAudio();
-      };
-
-
-      recorder.start();
-
-      mediaRecorder.current = recorder;
-      setIsMicActive(true);
-
-      startSilenceTimer();
-
-    } catch (err) {
-      console.error(err);
-      alert("Microphone permission denied.");
-    }
-  };
 
 
   /* -------------------------
@@ -171,6 +211,15 @@ export default function Chat() {
 
     setIsMicActive(false);
   };
+if (animationFrame.current) {
+  cancelAnimationFrame(animationFrame.current);
+  animationFrame.current = null;
+}
+
+audioContext.current?.close();
+audioContext.current = null;
+analyser.current = null;
+dataArray.current = null;
 
 
   /* -------------------------
